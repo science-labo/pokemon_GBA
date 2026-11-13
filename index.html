@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>GBA スマホ版ランチャー (EmulatorJS)</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    html, body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overscroll-behavior: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .no-select {
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    .drop-active {
+      border-color: #818cf8 !important;
+      background-color: rgba(99, 102, 241, 0.16) !important;
+    }
+    .gba-btn {
+      transition: transform 0.05s ease, filter 0.05s ease, box-shadow 0.05s ease;
+    }
+    .gba-btn.pressed {
+      transform: scale(0.92);
+      filter: brightness(1.25);
+    }
+    /* Maximize mode: fills entire viewport cleanly even on iOS Safari */
+    .is-maximized {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 50 !important;
+      width: 100vw !important;
+      height: 100dvh !important;
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border-radius: 0 !important;
+      background-color: #020617 !important;
+    }
+    .is-maximized #screen-frame {
+      border-radius: 0 !important;
+      border-left: 0 !important;
+      border-right: 0 !important;
+    }
+    @media (orientation: landscape) {
+      .play-layout {
+        flex-direction: row !important;
+      }
+      .screen-area {
+        height: 100%;
+        flex: 1 1 auto;
+      }
+      .pad-area {
+        width: 240px;
+        height: 100%;
+        flex-shrink: 0;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-[100dvh] flex flex-col overflow-x-hidden">
+  <!-- Header -->
+  <header id="app-header" class="border-b border-slate-800 bg-slate-900/90 backdrop-blur shrink-0 z-20">
+    <div class="max-w-lg mx-auto px-3 py-2.5 flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2 min-w-0">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <rect x="2" y="6" width="20" height="12" rx="3" />
+            <path d="M6 12h4M8 10v4" />
+            <circle cx="15.5" cy="13" r="1" fill="currentColor" />
+            <circle cx="18" cy="11" r="1" fill="currentColor" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <h1 class="text-sm font-bold truncate">GBA スマホランチャー</h1>
+          <p class="text-[11px] text-slate-400 truncate">EmulatorJS モバイル・ライブラリ対応</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button id="btn-maximize-top" type="button"
+          class="hidden px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition">
+          最大化
+        </button>
+        <button id="btn-reset" type="button"
+          class="hidden px-2.5 py-1.5 text-xs font-medium rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white transition">
+          終了
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Toast Banner -->
+  <div id="toast" class="hidden max-w-lg w-full mx-auto px-3 pt-2 shrink-0">
+    <div id="toast-inner" class="rounded-xl px-3 py-2 text-xs font-medium border flex items-center justify-between gap-2">
+      <span id="toast-msg"></span>
+      <button id="toast-close" type="button" class="text-xs opacity-75 hover:opacity-100 shrink-0">閉じる</button>
+    </div>
+  </div>
+
+  <!-- Setup & Game Library Panel (Before Launch) -->
+  <main id="launcher-panel" class="flex-1 max-w-lg w-full mx-auto px-3 py-4 space-y-4">
+    <!-- Bulk Import / Quick Launch Card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h2 class="text-sm sm:text-base font-bold text-white">ROMライブラリ（IndexedDB 保存）</h2>
+          <p class="text-[11px] text-slate-400 mt-0.5">
+            一度スマホから <code class="text-indigo-300">.gba</code> を複数選択して登録すると、次回からタップ1回で即起動できます。
+          </p>
+        </div>
+        <span id="library-count" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-indigo-300 shrink-0">
+          0 / 8 登録
+        </span>
+      </div>
+
+      <label id="drop-zone" for="rom-input"
+        class="block border-2 border-dashed border-slate-700 active:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition bg-slate-950/60">
+        <input id="rom-input" type="file" accept=".gba,.zip" multiple class="sr-only" />
+        <p class="text-xs sm:text-sm font-semibold text-slate-200">
+          タップして <span class="text-indigo-400">.gba</span> を一括登録（複数選択可）
+        </p>
+        <p id="rom-file-info" class="text-[11px] text-slate-400 mt-1">
+          8作品をまとめて選んで登録できます（ドラッグ＆ドロップ対応）
+        </p>
+      </label>
+
+      <!-- Game Library Grid -->
+            <!-- Game Library Grid -->
+      <div id="game-grid" class="grid grid-cols-1 gap-2"></div>
+
+      <button id="btn-launch" type="button" disabled
+        class="w-full py-2.5 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white transition shadow-lg shadow-indigo-600/25">
+        ゲームを起動する
+      </button>
+    </div>
+
+    <!-- Emulator Settings Card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+      <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider">起動設定</h3>
+      <div class="grid grid-cols-2 gap-2.5">
+        <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5">
+          <label for="opt-core" class="block text-[11px] font-medium text-slate-400 mb-1">コア</label>
+          <select id="opt-core"
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+            <option value="gba">mGBA (標準)</option>
+            <option value="vba_next">VBA-Next</option>
+          </select>
+        </div>
+
+        <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5">
+          <label for="opt-lang" class="block text-[11px] font-medium text-slate-400 mb-1">言語</label>
+          <select id="opt-lang"
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+            <option value="ja">日本語</option>
+            <option value="en-US">English</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between gap-2 text-xs text-slate-300 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2.5">
+        <label for="opt-haptic" class="flex items-center gap-2 cursor-pointer">
+          <input id="opt-haptic" type="checkbox" checked class="rounded border-slate-700 bg-slate-900 text-indigo-500" />
+          <span>バイブレーション</span>
+        </label>
+        <label for="opt-autostart" class="flex items-center gap-1.5 cursor-pointer">
+          <input id="opt-autostart" type="checkbox" checked class="rounded border-slate-700 bg-slate-900 text-indigo-500" />
+          <span>自動開始</span>
+        </label>
+      </div>
+    </div>
+  </main>
+
+  <!-- Handheld Play Container (Upper Screen + Lower GBA Controller) -->
+  <section id="play-container" class="hidden flex-1 max-w-lg w-full mx-auto flex flex-col justify-between bg-slate-900 border-x border-slate-800 overflow-hidden">
+    <div class="play-layout flex flex-col flex-1 h-full overflow-hidden">
+      <!-- Top Half: GBA Screen -->
+      <div class="screen-area flex flex-col justify-center bg-black relative shrink-0">
+        <!-- Floating Maximize / Restore Bar -->
+        <div class="absolute top-2 right-2 z-30 flex items-center gap-1.5">
+          <button id="btn-maximize" type="button"
+            class="px-2.5 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-semibold text-slate-100 backdrop-blur flex items-center gap-1 shadow">
+            <svg id="icon-expand" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+            <span id="btn-maximize-label">最大化</span>
+          </button>
+        </div>
+
+        <div id="screen-frame" class="w-full aspect-[3/2] max-h-[48dvh] mx-auto bg-black overflow-hidden border-y border-slate-800">
+          <div id="game" class="w-full h-full"></div>
+        </div>
+      </div>
+
+      <!-- Bottom Half: GBA Physical-Style Controller -->
+      <div class="pad-area flex-1 bg-gradient-to-b from-slate-900 to-slate-950 px-4 py-3 flex flex-col justify-between no-select">
+        <!-- L / R Shoulder Buttons -->
+        <div class="flex items-center justify-between gap-4">
+          <button type="button" data-key="a" data-code="KeyA" data-keycode="65"
+            class="gba-btn flex-1 max-w-[110px] py-2 rounded-t-xl rounded-b-md bg-slate-800 border border-slate-600 text-xs font-bold text-slate-200 shadow-inner">
+            L
+          </button>
+          <span id="playing-title" class="text-[11px] text-slate-400 truncate text-center flex-1"></span>
+          <button type="button" data-key="s" data-code="KeyS" data-keycode="83"
+            class="gba-btn flex-1 max-w-[110px] py-2 rounded-t-xl rounded-b-md bg-slate-800 border border-slate-600 text-xs font-bold text-slate-200 shadow-inner">
+            R
+          </button>
+        </div>
+
+        <!-- Middle Row: D-Pad (Left) & A/B Buttons (Right) -->
+        <div class="flex items-center justify-between gap-2 my-auto py-2">
+          <!-- D-Pad (Cross Arrows) -->
+          <div class="relative w-36 h-36 sm:w-40 sm:h-40 shrink-0">
+            <button type="button" data-key="ArrowUp" data-code="ArrowUp" data-keycode="38" aria-label="上"
+              class="gba-btn absolute top-0 left-1/3 w-1/3 h-1/3 bg-slate-700 border border-slate-500 rounded-t-xl flex items-center justify-center text-slate-100 shadow-md">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 5l6 7H4l6-7z"/></svg>
+            </button>
+            <button type="button" data-key="ArrowDown" data-code="ArrowDown" data-keycode="40" aria-label="下"
+              class="gba-btn absolute bottom-0 left-1/3 w-1/3 h-1/3 bg-slate-700 border border-slate-500 rounded-b-xl flex items-center justify-center text-slate-100 shadow-md">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 15l-6-7h12l-6 7z"/></svg>
+            </button>
+            <button type="button" data-key="ArrowLeft" data-code="ArrowLeft" data-keycode="37" aria-label="左"
+              class="gba-btn absolute top-1/3 left-0 w-1/3 h-1/3 bg-slate-700 border border-slate-500 rounded-l-xl flex items-center justify-center text-slate-100 shadow-md">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M5 10l7-6v12l-7-6z"/></svg>
+            </button>
+            <button type="button" data-key="ArrowRight" data-code="ArrowRight" data-keycode="39" aria-label="右"
+              class="gba-btn absolute top-1/3 right-0 w-1/3 h-1/3 bg-slate-700 border border-slate-500 rounded-r-xl flex items-center justify-center text-slate-100 shadow-md">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M15 10l-7 6V4l7 6z"/></svg>
+            </button>
+            <div class="absolute top-1/3 left-1/3 w-1/3 h-1/3 bg-slate-700 flex items-center justify-center pointer-events-none">
+              <div class="w-4 h-4 rounded-full bg-slate-800/80"></div>
+            </div>
+          </div>
+
+          <!-- B & A Buttons -->
+          <div class="relative w-36 h-36 sm:w-40 sm:h-40 shrink-0">
+            <button type="button" data-key="z" data-code="KeyZ" data-keycode="90"
+              class="gba-btn absolute bottom-3 left-1 w-16 h-16 rounded-full bg-rose-600 border-2 border-rose-400 text-white text-xl font-extrabold shadow-lg shadow-rose-950/60 flex items-center justify-center">
+              B
+            </button>
+            <button type="button" data-key="x" data-code="KeyX" data-keycode="88"
+              class="gba-btn absolute top-3 right-1 w-16 h-16 rounded-full bg-indigo-600 border-2 border-indigo-400 text-white text-xl font-extrabold shadow-lg shadow-indigo-950/60 flex items-center justify-center">
+              A
+            </button>
+          </div>
+        </div>
+
+        <!-- Bottom Row: SELECT / START -->
+        <div class="flex items-center justify-center gap-6 pb-1">
+          <button type="button" data-key="Shift" data-code="ShiftLeft" data-keycode="16"
+            class="gba-btn px-4 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-[11px] font-bold tracking-wider text-slate-300">
+            SELECT
+          </button>
+          <button type="button" data-key="Enter" data-code="Enter" data-keycode="13"
+            class="gba-btn px-4 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-[11px] font-bold tracking-wider text-slate-300">
+            START
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      const PRESET_TITLES = [
+        { id: 'deneb', title: '３月８日デネブ', filename: '３月８日デネブ.gba', tag: 'GBA' },
+        { id: 'altair', title: '６月１８日完成版アルタイル', filename: '６月１８日完成版アルタイル.GBA', tag: 'GBA' },
+        { id: 'sirius', title: '６月１８日完成版シリウス', filename: '６月１８日完成版シリウス.GBA', tag: 'GBA' },
+        { id: 'vega', title: '６月１８日完成版ベガ', filename: '６月１８日完成版ベガ.gba', tag: 'GBA' },
+        { id: 'frld', title: 'FRLD', filename: 'FRLD.gba', tag: 'GBA' },
+        { id: 'darkness', title: 'ダークネス', filename: 'ダークネス.gba', tag: 'GBA' },
+        { id: 'firered', title: 'ポケットモンスター ファイアレッド', filename: 'ポケットモンスター　ファイアレッド.gba', tag: 'GBA' },
+        { id: 'rainbow', title: 'ポケットモンスター レインボー beta2', filename: 'ポケットモンスター　レインボー　beta2.gba', tag: 'GBA' }
+      ];
+
+      const DB_NAME = 'GbaMobileLauncherDB';
+      const STORE_NAME = 'roms';
+
+      const appHeader = document.getElementById('app-header');
+      const launcherPanel = document.getElementById('launcher-panel');
+      const playContainer = document.getElementById('play-container');
+      const romInput = document.getElementById('rom-input');
+      const dropZone = document.getElementById('drop-zone');
+      const romFileInfo = document.getElementById('rom-file-info');
+      const gameGrid = document.getElementById('game-grid');
+      const libraryCount = document.getElementById('library-count');
+      const optCore = document.getElementById('opt-core');
+      const optLang = document.getElementById('opt-lang');
+      const optHaptic = document.getElementById('opt-haptic');
+      const optAutostart = document.getElementById('opt-autostart');
+      const btnLaunch = document.getElementById('btn-launch');
+      const btnReset = document.getElementById('btn-reset');
+      const btnMaximize = document.getElementById('btn-maximize');
+      const btnMaximizeTop = document.getElementById('btn-maximize-top');
+      const btnMaximizeLabel = document.getElementById('btn-maximize-label');
+      const playingTitle = document.getElementById('playing-title');
+      const toast = document.getElementById('toast');
+      const toastInner = document.getElementById('toast-inner');
+      const toastMsg = document.getElementById('toast-msg');
+      const toastClose = document.getElementById('toast-close');
+
+      let storedRoms = new Map();
+      let isLaunched = false;
+      let isMaximized = false;
+
+      // Preferences
+      try {
+        const savedCore = localStorage.getItem('gba_mobile_core');
+        const savedLang = localStorage.getItem('gba_mobile_lang');
+        if (savedCore && ['gba', 'vba_next'].includes(savedCore)) optCore.value = savedCore;
+        if (savedLang && ['ja', 'en-US'].includes(savedLang)) optLang.value = savedLang;
+      } catch (_) {}
+
+      function savePrefs() {
+        try {
+          localStorage.setItem('gba_mobile_core', optCore.value);
+          localStorage.setItem('gba_mobile_lang', optLang.value);
+        } catch (_) {}
+      }
+      optCore.addEventListener('change', savePrefs);
+      optLang.addEventListener('change', savePrefs);
+
+      function showToast(message, type = 'info') {
+        toastMsg.textContent = message;
+        toastInner.className = 'rounded-xl px-3 py-2 text-xs font-medium border flex items-center justify-between gap-2 ' +
+          (type === 'error'
+            ? 'bg-rose-950/80 border-rose-800 text-rose-200'
+            : 'bg-indigo-950/80 border-indigo-800 text-indigo-200');
+        toast.classList.remove('hidden');
+      }
+      toastClose.addEventListener('click', () => toast.classList.add('hidden'));
+
+      function formatBytes(bytes) {
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      }
+
+      function normalizeName(name) {
+        return name.toLowerCase().replace(/[\s　]+/g, '');
+      }
+
+      // IndexedDB helpers
+      function openDB() {
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+              db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+            }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      async function loadAllFromDB() {
+        try {
+          const db = await openDB();
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const store = tx.objectStore(STORE_NAME);
+          const all = await new Promise((resolve, reject) => {
+            const r = store.getAll();
+            r.onsuccess = () => resolve(r.result || []);
+            r.onerror = () => reject(r.error);
+          });
+          storedRoms.clear();
+          all.forEach((item) => storedRoms.set(item.key, item));
+        } catch (_) {
+          // Fallback to in-memory only if IndexedDB is restricted
+        }
+        renderLibrary();
+      }
+
+      async function saveRomToDB(key, title, file) {
+        const buffer = await file.arrayBuffer();
+        const record = {
+          key,
+          title,
+          filename: file.name,
+          size: file.size,
+          blob: new Blob([buffer], { type: 'application/octet-stream' }),
+          updatedAt: Date.now()
+        };
+        storedRoms.set(key, record);
+        try {
+          const db = await openDB();
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          tx.objectStore(STORE_NAME).put(record);
+          await new Promise((resolve, reject) => {
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+          });
+        } catch (_) {}
+      }
+
+      async function deleteRomFromDB(key) {
+        storedRoms.delete(key);
+        try {
+          const db = await openDB();
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          tx.objectStore(STORE_NAME).delete(key);
+        } catch (_) {}
+        renderLibrary();
+      }
+
+      function launchRom(record) {
+        if (!record || isLaunched) return;
+        isLaunched = true;
+
+        const romBlobUrl = URL.createObjectURL(record.blob);
+        window.EJS_player = '#game';
+        window.EJS_core = optCore.value;
+        window.EJS_gameName = record.title;
+        window.EJS_gameUrl = romBlobUrl;
+        window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+        window.EJS_color = '#4f46e5';
+        window.EJS_language = optLang.value;
+        window.EJS_startOnLoaded = optAutostart.checked;
+        window.EJS_VirtualGamepadSettings = [];
+
+        launcherPanel.classList.add('hidden');
+        playContainer.classList.remove('hidden');
+        btnReset.classList.remove('hidden');
+        btnMaximizeTop.classList.remove('hidden');
+        playingTitle.textContent = record.title;
+
+        const loaderScript = document.createElement('script');
+        loaderScript.src = 'https://cdn.emulatorjs.org/stable/data/loader.js';
+        loaderScript.onerror = () => {
+          showToast('EmulatorJS の読み込みに失敗しました。通信環境を確認してください。', 'error');
+        };
+        document.body.appendChild(loaderScript);
+      }
+
+      function renderLibrary() {
+        gameGrid.innerHTML = '';
+        let presetRegisteredCount = 0;
+
+        // Render 8 preset titles
+        PRESET_TITLES.forEach((preset) => {
+          const rec = storedRoms.get(preset.id);
+          if (rec) presetRegisteredCount++;
+
+          const card = document.createElement('div');
+          card.className = 'flex items-center justify-between gap-2 rounded-xl border p-2.5 transition ' +
+            (rec
+              ? 'bg-slate-950/90 border-indigo-500/50 hover:border-indigo-400'
+              : 'bg-slate-950/40 border-slate-800/90');
+
+          const infoBtn = document.createElement('button');
+          infoBtn.type = 'button';
+          infoBtn.className = 'flex items-center gap-2.5 min-w-0 flex-1 text-left';
+          infoBtn.innerHTML = `
+            <span class="w-9 h-9 rounded-lg flex items-center justify-center text-[10px] font-extrabold shrink-0 ${
+              rec ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400'
+            }">${preset.tag}</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs sm:text-sm font-semibold truncate ${rec ? 'text-white' : 'text-slate-300'}">${preset.title}</div>
+              <div class="text-[11px] truncate ${rec ? 'text-emerald-400' : 'text-slate-500'}">
+                ${rec ? `保存済み (${formatBytes(rec.size)}) ・タップで起動` : '未登録（上のエリアから登録）'}
+              </div>
+            </div>
+          `;
+          infoBtn.addEventListener('click', () => {
+            if (rec) {
+              launchRom(rec);
+            } else {
+              romInput.click();
+            }
+          });
+
+          card.appendChild(infoBtn);
+
+          if (rec) {
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'px-2 py-1 rounded-lg text-[11px] text-slate-400 hover:text-rose-400 hover:bg-slate-800 shrink-0';
+            delBtn.textContent = '削除';
+            delBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              deleteRomFromDB(preset.id);
+            });
+            card.appendChild(delBtn);
+          } else {
+            const addBadge = document.createElement('button');
+            addBadge.type = 'button';
+            addBadge.className = 'px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 shrink-0';
+            addBadge.textContent = '登録';
+            addBadge.addEventListener('click', () => romInput.click());
+            card.appendChild(addBadge);
+          }
+
+          gameGrid.appendChild(card);
+        });
+
+        // Render any extra custom ROMs not in the 8 presets
+        const presetIds = new Set(PRESET_TITLES.map((p) => p.id));
+        storedRoms.forEach((rec, key) => {
+          if (presetIds.has(key)) return;
+          const card = document.createElement('div');
+          card.className = 'flex items-center justify-between gap-2 rounded-xl border bg-slate-950/90 border-emerald-500/40 p-2.5';
+
+          const infoBtn = document.createElement('button');
+          infoBtn.type = 'button';
+          infoBtn.className = 'flex items-center gap-2.5 min-w-0 flex-1 text-left';
+          infoBtn.innerHTML = `
+            <span class="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center text-[10px] font-extrabold shrink-0">ROM</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs sm:text-sm font-semibold text-white truncate">${rec.title}</div>
+              <div class="text-[11px] text-emerald-400 truncate">保存済み (${formatBytes(rec.size)}) ・タップで起動</div>
+            </div>
+          `;
+          infoBtn.addEventListener('click', () => launchRom(rec));
+
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'px-2 py-1 rounded-lg text-[11px] text-slate-400 hover:text-rose-400 hover:bg-slate-800 shrink-0';
+          delBtn.textContent = '削除';
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteRomFromDB(key);
+          });
+
+          card.appendChild(infoBtn);
+          card.appendChild(delBtn);
+          gameGrid.appendChild(card);
+        });
+
+        libraryCount.textContent = `${presetRegisteredCount} / ${PRESET_TITLES.length} 登録`;
+        const firstAvailable = Array.from(storedRoms.values())[0] || null;
+        btnLaunch.disabled = !firstAvailable;
+        btnLaunch.onclick = () => { if (firstAvailable) launchRom(firstAvailable); };
+      }
+
+      async function handleFilesImport(fileList) {
+        const files = Array.from(fileList || []).filter((f) => {
+          const lower = f.name.toLowerCase();
+          return lower.endsWith('.gba') || lower.endsWith('.zip');
+        });
+        if (!files.length) {
+          showToast('.gba または .zip ファイルを選択してください。', 'error');
+          return;
+        }
+
+        romFileInfo.textContent = `${files.length} 件のROMを保存中...`;
+        for (const file of files) {
+          const normFile = normalizeName(file.name);
+          const matchedPreset = PRESET_TITLES.find((p) => normalizeName(p.filename) === normFile);
+          if (matchedPreset) {
+            await saveRomToDB(matchedPreset.id, matchedPreset.title, file);
+          } else {
+            const customKey = 'custom_' + normFile;
+            const customTitle = file.name.replace(/\.(gba|zip)$/i, '');
+            await saveRomToDB(customKey, customTitle, file);
+          }
+        }
+        romFileInfo.textContent = `${files.length} 件をライブラリに保存しました（タップで即起動）`;
+        romFileInfo.classList.remove('text-slate-400');
+        romFileInfo.classList.add('text-emerald-400', 'font-semibold');
+        renderLibrary();
+        showToast(`${files.length} 件のROMをブラウザに保存しました。タイトルをタップして遊べます。`, 'info');
+      }
+
+      romInput.addEventListener('change', (e) => {
+        handleFilesImport(e.target.files);
+        e.target.value = '';
+      });
+
+      ['dragenter', 'dragover'].forEach((evt) => {
+        dropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.add('drop-active');
+        });
+      });
+      ['dragleave', 'drop'].forEach((evt) => {
+        dropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.remove('drop-active');
+        });
+      });
+      dropZone.addEventListener('drop', (e) => {
+        handleFilesImport(e.dataTransfer && e.dataTransfer.files);
+      });
+
+      // Maximize / Fullscreen toggle
+      async function toggleMaximize() {
+        isMaximized = !isMaximized;
+        if (isMaximized) {
+          playContainer.classList.add('is-maximized');
+          appHeader.classList.add('hidden');
+          btnMaximizeLabel.textContent = '元に戻す';
+          try {
+            if (document.documentElement.requestFullscreen) {
+              await document.documentElement.requestFullscreen();
+            }
+          } catch (_) {}
+        } else {
+          playContainer.classList.remove('is-maximized');
+          appHeader.classList.remove('hidden');
+          btnMaximizeLabel.textContent = '最大化';
+          try {
+            if (document.fullscreenElement && document.exitFullscreen) {
+              await document.exitFullscreen();
+            }
+          } catch (_) {}
+        }
+        window.dispatchEvent(new Event('resize'));
+      }
+
+      btnMaximize.addEventListener('click', toggleMaximize);
+      btnMaximizeTop.addEventListener('click', toggleMaximize);
+
+      document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && isMaximized) {
+          isMaximized = false;
+          playContainer.classList.remove('is-maximized');
+          appHeader.classList.remove('hidden');
+          btnMaximizeLabel.textContent = '最大化';
+          window.dispatchEvent(new Event('resize'));
+        }
+      });
+
+      btnReset.addEventListener('click', () => window.location.reload());
+
+      // Virtual Controller -> KeyboardEvent bridge
+      function dispatchGameKey(type, btn) {
+        const key = btn.dataset.key;
+        const code = btn.dataset.code;
+        const keyCode = Number(btn.dataset.keycode);
+        const eventInit = {
+          key,
+          code,
+          keyCode,
+          which: keyCode,
+          bubbles: true,
+          cancelable: true
+        };
+        window.dispatchEvent(new KeyboardEvent(type, eventInit));
+        document.dispatchEvent(new KeyboardEvent(type, eventInit));
+        const gameCanvas = document.querySelector('#game canvas');
+        if (gameCanvas) {
+          gameCanvas.dispatchEvent(new KeyboardEvent(type, eventInit));
+        }
+      }
+
+      const activePointers = new Map();
+      document.querySelectorAll('.gba-btn').forEach((btn) => {
+        const press = (e) => {
+          e.preventDefault();
+          if (activePointers.has(e.pointerId)) return;
+          activePointers.set(e.pointerId, btn);
+          btn.classList.add('pressed');
+          if (optHaptic.checked && navigator.vibrate) {
+            try { navigator.vibrate(12); } catch (_) {}
+          }
+          dispatchGameKey('keydown', btn);
+        };
+        const release = (e) => {
+          if (!activePointers.has(e.pointerId)) return;
+          const targetBtn = activePointers.get(e.pointerId);
+          activePointers.delete(e.pointerId);
+          targetBtn.classList.remove('pressed');
+          dispatchGameKey('keyup', targetBtn);
+        };
+        btn.addEventListener('pointerdown', press);
+        btn.addEventListener('pointerup', release);
+        btn.addEventListener('pointercancel', release);
+        btn.addEventListener('pointerleave', release);
+      });
+
+      // Initialize library
+      loadAllFromDB();
+    })();
+  </script>
+</body>
+</html>
